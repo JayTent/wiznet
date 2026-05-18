@@ -222,10 +222,9 @@ int wiz_closed_notice_cb(int socket)
 
     return 0;
 }
-
+static rt_mutex_t wiz_slock = RT_NULL;
 static struct wiz_socket *alloc_socket(void)
 {
-    static rt_mutex_t wiz_slock = RT_NULL;
     struct wiz_socket *sock = RT_NULL;
     char name[RT_NAME_MAX] = {0};
     int idx = 0;
@@ -464,6 +463,7 @@ static int remove_clnt_list(struct wiz_socket *sock)
 
 static int free_socket(struct wiz_socket *sock)
 {
+    rt_mutex_take(wiz_slock, RT_WAITING_FOREVER); // 加锁
     if (sock->recv_notice)
     {
         rt_sem_delete(sock->recv_notice);
@@ -491,7 +491,7 @@ static int free_socket(struct wiz_socket *sock)
     }
 
     rt_memset(sock, 0x00, sizeof(struct wiz_socket));
-
+    rt_mutex_release(wiz_slock);
     return 0;
 }
 
@@ -501,7 +501,11 @@ int wiz_closesocket(int socket)
     uint8_t socket_state = 0;
 
     /* check WIZnet initialize status */
-    WIZ_INIT_STATUS_CHECK;
+    // WIZ_INIT_STATUS_CHECK;
+    if (wiz_init_ok == RT_FALSE)
+    {
+        return -1;
+    }
 
     sock = wiz_get_socket(socket);
     if (sock == RT_NULL)
@@ -517,10 +521,18 @@ int wiz_closesocket(int socket)
     }
 
      int8_t res;
-    if(sock->type == Sn_MR_TCP)
-        res = wizchip_disconnect(socket);
-    else 
+    /* 网线断开的情况不必再执行 TCP 4次挥手 */
+    if ((getPHYCFGR() & PHYCFGR_LNK_ON) != PHYCFGR_LNK_ON)
+    {
         res = wizchip_close(socket);
+    }
+    else
+    {
+        if(sock->type == Sn_MR_TCP)
+            res = wizchip_disconnect(socket);
+        else 
+            res = wizchip_close(socket);
+    }
         
     if ( res != SOCK_OK)
     {
@@ -538,7 +550,11 @@ int wiz_shutdown(int socket, int how)
     uint8_t socket_state = 0;
 
     /* check WIZnet initialize status */
-    WIZ_INIT_STATUS_CHECK;
+    // WIZ_INIT_STATUS_CHECK;
+    if (wiz_init_ok == RT_FALSE)
+    {
+        return -1;
+    }
 
     sock = wiz_get_socket(socket);
     if (sock == RT_NULL)
